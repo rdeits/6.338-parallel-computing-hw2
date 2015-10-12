@@ -28,33 +28,33 @@ function xenergy(b, x, y)
   b[x-1, y] + 2b[x, y] + b[x+1, y]
 end
 
-xenergy(b) = [fill(Inf32, 1, size(b, 2));
-              [xenergy(b, x, y) for x=2:size(b, 1)-1, y=1:size(b, 2)];
-              fill(Inf32, 1, size(b, 2))]
+# xenergy(b) = [fill(Inf32, 1, size(b, 2));
+#               [xenergy(b, x, y) for x=2:size(b, 1)-1, y=1:size(b, 2)];
+#               fill(Inf32, 1, size(b, 2))]
 
 function yenergy(b, x, y)
   b[x, y-1] + 2b[x, y] + b[x, y+1]
 end
 
-yenergy(b) = hcat(fill(Inf32, size(b, 1), 1),
-              [yenergy(b, x, y) for x=1:size(b, 1), y=2:size(b, 2)-1],
-              fill(Inf32, size(b, 1), 1))
+# yenergy(b) = hcat(fill(Inf32, size(b, 1), 1),
+#               [yenergy(b, x, y) for x=1:size(b, 1), y=2:size(b, 2)-1],
+#               fill(Inf32, size(b, 1), 1))
 
 function energy(xenergy, yenergy, x, y)
   sqrt((xenergy[x, y-1] - xenergy[x, y+1])^2 + (yenergy[x-1, y] - yenergy[x+1, y])^2)
 end
 
-function energy(xenergy, yenergy)
-  e = Array(Float32, size(xenergy, 1), size(xenergy, 2)-2)
-  e[1,:] = Inf32
-  e[end,:] = Inf32
-  for x = 2:size(xenergy, 1)-1
-    for y = 2:size(xenergy, 2)-1
-      e[x,y-1] = energy(xenergy, yenergy, x, y)
-    end
-  end
-  e
-end
+# function energy(xenergy, yenergy)
+#   e = Array(Float32, size(xenergy, 1), size(xenergy, 2)-2)
+#   e[1,:] = Inf32
+#   e[end,:] = Inf32
+#   for x = 2:size(xenergy, 1)-1
+#     for y = 2:size(xenergy, 2)-1
+#       e[x,y-1] = energy(xenergy, yenergy, x, y)
+#     end
+#   end
+#   e
+# end
 
 # the 3x3 stencil for energy
 function stencil(b)
@@ -73,42 +73,105 @@ function energy(b)
   [infcol; e; infcol]
 end
 
-function cost_to_go(e)
-  w, h = size(e)
-  cost_to_go = copy(e)
-  dirs = zeros(Int8, w-2, h-1)
-  for y = h-1:-1:1
-    for x = 2:w-1
-      s, dirs[x-1,y] = findmin(cost_to_go[x+[-1, 0, 1], y+1])
-      cost_to_go[x,y] += s
-    end
-  end
-  cost_to_go, dirs
-end
-
 
 type CarvableImage
   img::Image
+  width::Int32
+  height::Int32
   brightness::Array{Float32, 2}
   xenergy::Array{Float32, 2}
   yenergy::Array{Float32, 2}
   energy::Array{Float32, 2}
   cost_to_go::Array{Float32, 2}
   directions::Array{Int8, 2}
+  seam::Array{Int64, 1}
 
-  CarvableImage(img::Image) = (b = brightness(img);
-    xe = xenergy(b);
-    ye = yenergy(b);
-    e = energy(xe, ye);
-    @assert size(e) == size(energy(b));
-    @assert maximum(abs(e - energy(b))) <= 1e-4;
-    (c, dirs) = cost_to_go(e);
-    (c_expected, dirs_expected) = least_energy(e);
-    @assert dirs == dirs_expected;
-    new(img, b, xe, ye, e, c, dirs))
+  CarvableImage(img::Image) = (
+    (w, h) = size(img);
+    b = brightness(img);
+    xe = zeros(Float32, size(b, 1), size(b, 2));
+    ye = zeros(Float32, size(b, 1), size(b, 2));
+    e = zeros(Float32, size(b, 1), size(b, 2)-2);
+    c = zeros(Float32, size(b, 1), size(b, 2)-2);
+    dirs = zeros(Int8, size(b, 1)-2, size(b, 2)-3);
+    seam = zeros(Int64, size(b, 2)-2);
+    obj = new(img, w, h, b, xe, ye, e, c, dirs, seam);
+    update_xenergy!(obj);
+    update_yenergy!(obj);
+    update_energy!(obj);
+    update_cost_to_go!(obj);
+    update_seam!(obj);
+
+    @assert size(obj.energy) == size(energy(obj.brightness));
+    @assert maximum(abs(obj.energy - energy(obj.brightness))) <= 1e-4;
+    (c_expected, dirs_expected) = least_energy(obj.energy);
+    x_expected = indmin(c_expected);
+    seam_expected = get_seam(dirs_expected,x_expected);
+    @assert size(obj.directions) == size(dirs_expected);
+    @assert obj.directions == dirs_expected;
+    @assert obj.seam == seam_expected;
+    obj
+    )
 end
 
-size(c::CarvableImage) = size(c.img)
+function update_xenergy!(obj::CarvableImage)
+  for x = 2:obj.width+1
+    for y = 1:obj.height+2
+      obj.xenergy[x,y] = xenergy(obj.brightness, x, y)
+    end
+  end
+end
+
+function update_yenergy!(obj::CarvableImage)
+  for x = 1:obj.width+2
+    for y = 2:obj.height+1
+      obj.yenergy[x,y] = yenergy(obj.brightness, x, y)
+    end
+  end
+end
+
+function update_energy!(obj::CarvableImage)
+  obj.energy[1,:] = Inf32
+  obj.energy[obj.width+2,:] = Inf32
+  for x = 2:obj.width+1
+    for y = 2:obj.height+1
+      obj.energy[x, y-1] = energy(obj.xenergy, obj.yenergy, x, y)
+    end
+  end
+end
+
+function update_seam!(obj::CarvableImage)
+  obj.seam[1] = indmin(obj.cost_to_go[2:obj.width+1, 1])
+  for y=2:obj.height
+    obj.seam[y] = obj.seam[y-1] + obj.directions[obj.seam[y-1], y-1] - 2
+  end
+end
+
+
+# function cost_to_go(e)
+#   w, h = size(e)
+#   cost_to_go = copy(e)
+#   dirs = zeros(Int8, w-2, h-1)
+#   for y = h-1:-1:1
+#     for x = 2:w-1
+#       s, dirs[x-1,y] = findmin(cost_to_go[x+[-1, 0, 1], y+1])
+#       cost_to_go[x,y] += s
+#     end
+#   end
+#   cost_to_go, dirs
+# end
+
+function update_cost_to_go!(obj::CarvableImage)
+  obj.cost_to_go[:,end] = obj.energy[:,end]
+  obj.cost_to_go[1,:] = Inf32
+  obj.cost_to_go[obj.width+2,:] = Inf32
+  for y = obj.height-1:-1:1
+    for x = 2:obj.width+1
+      s, obj.directions[x-1,y] = findmin(obj.cost_to_go[x+[-1, 0, 1], y+1])
+      obj.cost_to_go[x,y] = obj.energy[x,y] + s
+    end
+  end
+end
 
 
 #  e (row                  e[x,y] 
