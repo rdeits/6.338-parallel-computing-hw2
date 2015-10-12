@@ -2,6 +2,8 @@ module ImageSeam
 
 using Images
 import FixedPointNumbers
+import Base.size
+
 
 # brightness of a color is the sum of the r,g,b values (stored as float32's)
 brightness(c)        =  c.r + c.g + c.b
@@ -9,12 +11,50 @@ brightness(c)        =  c.r + c.g + c.b
 # brightness of an image bordered with zeros
 function brightness(I::Image)
   w, h = size(I)
-  b = [brightness(I[x,y]) for x=1:w, y=1:h]
-  # borders
-  zv = fill(0f0,1,  h)  #  vertical zero 
-  zh = fill(0f0,w+2,1)  #  horizontal zero 
-  [zh  [zv; b; zv]  zh] 
- end
+  b = Array(Float32, w+2, h+2)
+  for x = 1:w
+    for y = 1:h
+      b[x+1, y+1] = brightness(I[x, y])
+    end
+  end
+  b[:,1] = 0
+  b[:,h+2] = 0
+  b[1,:] = 0
+  b[w+2,:] = 0
+  b
+end
+
+function xenergy(b, x, y)
+  b[x-1, y] + 2b[x, y] + b[x+1, y]
+end
+
+xenergy(b) = [fill(Inf32, 1, size(b, 2));
+              [xenergy(b, x, y) for x=2:size(b, 1)-1, y=1:size(b, 2)];
+              fill(Inf32, 1, size(b, 2))]
+
+function yenergy(b, x, y)
+  b[x, y-1] + 2b[x, y] + b[x, y+1]
+end
+
+yenergy(b) = hcat(fill(Inf32, size(b, 1), 1),
+              [yenergy(b, x, y) for x=1:size(b, 1), y=2:size(b, 2)-1],
+              fill(Inf32, size(b, 1), 1))
+
+function energy(xenergy, yenergy, x, y)
+  sqrt((xenergy[x, y-1] - xenergy[x, y+1])^2 + (yenergy[x-1, y] - yenergy[x+1, y])^2)
+end
+
+function energy(xenergy, yenergy)
+  e = Array(Float32, size(xenergy, 1), size(xenergy, 2)-2)
+  e[1,:] = Inf32
+  e[end,:] = Inf32
+  for x = 2:size(xenergy, 1)-1
+    for y = 2:size(xenergy, 2)-1
+      e[x,y-1] = energy(xenergy, yenergy, x, y)
+    end
+  end
+  e
+end
 
 # the 3x3 stencil for energy
 function stencil(b)
@@ -22,7 +62,7 @@ function stencil(b)
       yenergy = b[1,1]+2b[1,2]+b[1,3]-b[3,1]-2b[3,2]-b[3,3]
       √(xenergy^2 + yenergy^2)
 end
-    
+
 # energy of an array of brightness values 
 # input: assumed zero borders
 # output: left and right set to ∞
@@ -32,6 +72,44 @@ function energy(b)
   infcol = fill(Inf32,1,h-2)
   [infcol; e; infcol]
 end
+
+function cost_to_go(e)
+  w, h = size(e)
+  cost_to_go = copy(e)
+  dirs = zeros(Int8, w-2, h-1)
+  for y = h-1:-1:1
+    for x = 2:w-1
+      s, dirs[x-1,y] = findmin(cost_to_go[x+[-1, 0, 1], y+1])
+      cost_to_go[x,y] += s
+    end
+  end
+  cost_to_go, dirs
+end
+
+
+type CarvableImage
+  img::Image
+  brightness::Array{Float32, 2}
+  xenergy::Array{Float32, 2}
+  yenergy::Array{Float32, 2}
+  energy::Array{Float32, 2}
+  cost_to_go::Array{Float32, 2}
+  directions::Array{Int8, 2}
+
+  CarvableImage(img::Image) = (b = brightness(img);
+    xe = xenergy(b);
+    ye = yenergy(b);
+    e = energy(xe, ye);
+    @assert size(e) == size(energy(b));
+    @assert maximum(abs(e - energy(b))) <= 1e-4;
+    (c, dirs) = cost_to_go(e);
+    (c_expected, dirs_expected) = least_energy(e);
+    @assert dirs == dirs_expected;
+    new(img, b, xe, ye, e, c, dirs))
+end
+
+size(c::CarvableImage) = size(c.img)
+
 
 #  e (row                  e[x,y] 
 #  dirs:                ↙   ↓   ↘       <--directions naturally live between the rows
@@ -82,8 +160,12 @@ end
 function carve(img,seam)
     w, h = size(img)
 
-    newdata = Array(ColorTypes.RGB4{FixedPointNumbers.UfixedBase{UInt8,8}}, size(img.data, 1) - 1, size(img.data, 2))
-    newimg = Image(newdata)
+
+
+    # newdata = Array(ColorTypes.RGB4{FixedPointNumbers.UfixedBase{UInt8,8}}, size(img.data, 2), size(img.data, 1) - 1)
+    # newimg = Image(newdata)
+    newimg = copy(img)
+    newimg.data = newimg.data[1:w-1, :]
 
     for y=1:h
         s=seam[y]
@@ -105,11 +187,11 @@ end
 function all_carvings(img)
   println("When we reach $(size(img,1)-1) we have carved the image down to 1 pixel wide:")
   A=[img for i=1:1] # set up a vector of images
-  @profile for i=1:size(img,1)-1
+  @time for i=1:size(img,1)-1
     push!(A,carve(A[end]))
     if(rem(i,5)==0) || i==size(img,1)-1 print(i, " ") end
   end
-  Profile.print()
+  # Profile.print()
   A
 end
 
