@@ -87,6 +87,7 @@ type CarvableImage
   seam::Array{Int64, 1}
 
   CarvableImage(img::Image) = (
+    img = copy(img);
     (w, h) = size(img);
     b = brightness(img);
     xe = zeros(Float32, size(b, 1), size(b, 2));
@@ -96,25 +97,24 @@ type CarvableImage
     dirs = zeros(Int8, size(b, 1)-2, size(b, 2)-3);
     seam = zeros(Int64, size(b, 2)-2);
     obj = new(img, w, h, b, xe, ye, e, c, dirs, seam);
-    update_xenergy!(obj);
-    update_yenergy!(obj);
-    update_energy!(obj);
-    update_cost_to_go!(obj);
-    update_seam!(obj);
+    compute_xenergy!(obj);
+    compute_yenergy!(obj);
+    compute_energy!(obj);
 
-    @assert size(obj.energy) == size(energy(obj.brightness));
-    @assert maximum(abs(obj.energy - energy(obj.brightness))) <= 1e-4;
-    (c_expected, dirs_expected) = least_energy(obj.energy);
-    x_expected = indmin(c_expected);
-    seam_expected = get_seam(dirs_expected,x_expected);
-    @assert size(obj.directions) == size(dirs_expected);
-    @assert obj.directions == dirs_expected;
-    @assert obj.seam == seam_expected;
+    # carve!(obj);
+    # @assert size(obj.energy) == size(energy(obj.brightness));
+    # @assert maximum(abs(obj.energy - energy(obj.brightness))) <= 1e-4;
+    # (c_expected, dirs_expected) = least_energy(obj.energy);
+    # x_expected = indmin(c_expected);
+    # seam_expected = get_seam(dirs_expected,x_expected);
+    # @assert size(obj.directions) == size(dirs_expected);
+    # @assert obj.directions == dirs_expected;
+    # @assert obj.seam == seam_expected;
     obj
     )
 end
 
-function update_xenergy!(obj::CarvableImage)
+function compute_xenergy!(obj::CarvableImage)
   for x = 2:obj.width+1
     for y = 1:obj.height+2
       obj.xenergy[x,y] = xenergy(obj.brightness, x, y)
@@ -122,7 +122,7 @@ function update_xenergy!(obj::CarvableImage)
   end
 end
 
-function update_yenergy!(obj::CarvableImage)
+function compute_yenergy!(obj::CarvableImage)
   for x = 1:obj.width+2
     for y = 2:obj.height+1
       obj.yenergy[x,y] = yenergy(obj.brightness, x, y)
@@ -130,7 +130,7 @@ function update_yenergy!(obj::CarvableImage)
   end
 end
 
-function update_energy!(obj::CarvableImage)
+function compute_energy!(obj::CarvableImage)
   obj.energy[1,:] = Inf32
   obj.energy[obj.width+2,:] = Inf32
   for x = 2:obj.width+1
@@ -140,11 +140,44 @@ function update_energy!(obj::CarvableImage)
   end
 end
 
+function update_cost_to_go!(obj::CarvableImage)
+  obj.cost_to_go[:,end] = obj.energy[:,end]
+  obj.cost_to_go[1,:] = Inf32
+  obj.cost_to_go[obj.width+2,:] = Inf32
+  for y = obj.height-1:-1:1
+    for x = 2:obj.width+1
+      s, obj.directions[x-1,y] = findmin(obj.cost_to_go[x+[-1, 0, 1], y+1])
+      obj.cost_to_go[x,y] = obj.energy[x,y] + s
+    end
+  end
+end
+
 function update_seam!(obj::CarvableImage)
   obj.seam[1] = indmin(obj.cost_to_go[2:obj.width+1, 1])
   for y=2:obj.height
     obj.seam[y] = obj.seam[y-1] + obj.directions[obj.seam[y-1], y-1] - 2
   end
+end
+
+function remove_seam!(obj::CarvableImage)
+  for y = 1:obj.height
+    obj.img[obj.seam[y]:obj.width-1,y] = obj.img[obj.seam[y]+1:obj.width,y]
+    obj.brightness[1+(obj.seam[y]:obj.width-1),y] = obj.brightness[1+(obj.seam[y]+1:obj.width),y]
+  end
+  obj.width -= 1
+end
+
+function get_image(obj::CarvableImage)
+  obj.img[1:obj.width,:]
+end
+
+function carve!(obj::CarvableImage)
+  compute_xenergy!(obj)
+  compute_yenergy!(obj)
+  compute_energy!(obj)
+  update_cost_to_go!(obj)
+  update_seam!(obj)
+  remove_seam!(obj)
 end
 
 
@@ -160,19 +193,6 @@ end
 #   end
 #   cost_to_go, dirs
 # end
-
-function update_cost_to_go!(obj::CarvableImage)
-  obj.cost_to_go[:,end] = obj.energy[:,end]
-  obj.cost_to_go[1,:] = Inf32
-  obj.cost_to_go[obj.width+2,:] = Inf32
-  for y = obj.height-1:-1:1
-    for x = 2:obj.width+1
-      s, obj.directions[x-1,y] = findmin(obj.cost_to_go[x+[-1, 0, 1], y+1])
-      obj.cost_to_go[x,y] = obj.energy[x,y] + s
-    end
-  end
-end
-
 
 #  e (row                  e[x,y] 
 #  dirs:                ↙   ↓   ↘       <--directions naturally live between the rows
@@ -250,10 +270,14 @@ end
 function all_carvings(img)
   println("When we reach $(size(img,1)-1) we have carved the image down to 1 pixel wide:")
   A=[img for i=1:1] # set up a vector of images
-  @time for i=1:size(img,1)-1
-    push!(A,carve(A[end]))
-    if(rem(i,5)==0) || i==size(img,1)-1 print(i, " ") end
-  end
+  @time (C = CarvableImage(img);
+    for i=1:size(img,1)-1
+      carve!(C)
+      push!(A, get_image(C))
+      # push!(A,carve(A[end]))
+      if(rem(i,5)==0) || i==size(img,1)-1 print(i, " ") end
+    end
+    )
   # Profile.print()
   A
 end
