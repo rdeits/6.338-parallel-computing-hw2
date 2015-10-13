@@ -219,23 +219,26 @@ end
 
 function remove_seam!(obj::CarvableImage)
   for y = 1:obj.height
-    obj.img[obj.seam[y]:obj.width-1,y] = obj.img[obj.seam[y]+1:obj.width,y]
-    obj.brightness[1+(obj.seam[y]:obj.width-1),y] = obj.brightness[1+(obj.seam[y]+1:obj.width),y]
+    for x = obj.seam[y]:obj.width-1
+      obj.img[x, y] = obj.img[x+1, y]
+      obj.brightness[x+1, y] = obj.brightness[x+2, y]
+    end
   end
   obj.width -= 1
 end
 
 function get_image(obj::CarvableImage)
+  # shareproperties(obj.img, obj.img.data[1:obj.width, :])
   obj.img[1:obj.width,:]
 end
 
 function carve!(obj::CarvableImage)
-  remove_seam!(obj)
-  update_xenergy!(obj)
-  update_yenergy!(obj)
-  update_energy!(obj)
-  compute_cost_to_go!(obj)
-  compute_seam!(obj)
+  @inbounds remove_seam!(obj)
+  @inbounds update_xenergy!(obj)
+  @inbounds update_yenergy!(obj)
+  @inbounds update_energy!(obj)
+  @inbounds compute_cost_to_go!(obj)
+  @inbounds compute_seam!(obj)
 end
 
 #  e (row                  e[x,y] 
@@ -312,11 +315,14 @@ end
 # end
 
 function all_carvings(img::Image)
-  A=[img for i=1:1] # set up a vector of images
+  # A=[img for i=1:1] # set up a vector of images
+  A = Array(Image, size(img, 1))
+  A[1] = img
   C = CarvableImage(img)
   for i=1:size(img,1)-1
     carve!(C)
-    push!(A, get_image(C))
+    A[i+1] = get_image(C)
+    # push!(A, get_image(C))
     # push!(A,carve(A[end]))
   end
   A
