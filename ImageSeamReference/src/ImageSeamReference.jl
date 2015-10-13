@@ -104,12 +104,12 @@ function carve(img, n::Int)
   img2
 end
 
-function all_carvings(img)
-  println("When we reach $(size(img,1)-1) we have carved the image down to 1 pixel wide:")
+function precompute_all_sizes(img)
+  # println("When we reach $(size(img,1)-1) we have carved the image down to 1 pixel wide:")
   A=[img for i=1:1] # set up a vector of images
   for i=1:size(img,1)-1
     push!(A,carve(A[end]))
-    if(rem(i,5)==0) || i==size(img,1)-1 print(i, " ") end
+    # if(rem(i,5)==0) || i==size(img,1)-1 print(i, " ") end
   end
   A
 end
@@ -119,7 +119,7 @@ function save_expected_data()
     run(`wget https://upload.wikimedia.org/wikipedia/commons/thumb/c/cb/Broadway_tower_edit.jpg/320px-Broadway_tower_edit.jpg`)
   end
   img = imread("320px-Broadway_tower_edit.jpg")
-  A = generate_all_carvings(img)
+  A = generate_precompute_all_sizes(img)
   outfile = open("tower_carves.dat", "w")
   serialize(outfile, A)
   close(outfile)
